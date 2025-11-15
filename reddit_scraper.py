@@ -62,7 +62,7 @@ class RedditScraper:
         except FileNotFoundError:
             print("⚠ No cookies.txt found, continuing without cookies")
     
-    async def find_subreddits(self, page, keyword, max_subreddits=5):
+    async def find_subreddits(self, page, keyword, max_subreddits=10):
         """Find relevant subreddits for the keyword"""
         print(f"\n🔍 Searching for subreddits related to '{keyword}'...")
         subreddits = []
@@ -119,7 +119,7 @@ class RedditScraper:
         
         return subreddits[:max_subreddits]
 
-    async def get_active_users(self, page, subreddit, max_users=5):
+    async def get_active_users(self, page, subreddit, max_users=25):
         """Collect active users from a subreddit"""
         print(f"\n👥 Collecting users from r/{subreddit}...")
         users = set()
@@ -233,35 +233,29 @@ class RedditScraper:
                     user_data['contributions'] = contrib_match.group(1).replace(',', '')
                     break
             
-            # Extract reddit age - Reddit shows it as "6 y" or "3 mo" or "15 d"
-            # Look for age pattern near "Reddit Age" text for accuracy
-            age_section = re.search(r'Reddit\s*Age[:\s]*(.*?)(?:Social|Trophies|Moderator|$)', page_text, re.IGNORECASE | re.DOTALL)
+            # Extract reddit age - Keep Reddit's format like "6 y", "10 m", "15 d"
+            # Pattern 1: "X y" format (years)
+            age_match = re.search(r'(\d+)\s*y\b', page_text, re.IGNORECASE)
+            if age_match:
+                years = age_match.group(1)
+                if 1 <= int(years) <= 20:
+                    user_data['reddit_age'] = f"{years} y"
             
-            if age_section:
-                age_text = age_section.group(1)[:50]  # Limit to 50 chars after "Reddit Age"
-                
-                # Try years
-                year_match = re.search(r'(\d+)\s*y\b', age_text, re.IGNORECASE)
-                if year_match:
-                    years = year_match.group(1)
-                    if 1 <= int(years) <= 20:
-                        user_data['reddit_age'] = f"{years} years"
-                
-                # Try months
-                if user_data['reddit_age'] == 'N/A':
-                    month_match = re.search(r'(\d+)\s*mo\b', age_text, re.IGNORECASE)
-                    if month_match:
-                        months = month_match.group(1)
-                        if 1 <= int(months) <= 24:
-                            user_data['reddit_age'] = f"{months} months"
-                
-                # Try days
-                if user_data['reddit_age'] == 'N/A':
-                    day_match = re.search(r'(\d+)\s*d\b', age_text, re.IGNORECASE)
-                    if day_match:
-                        days = day_match.group(1)
-                        if 1 <= int(days) <= 365:
-                            user_data['reddit_age'] = f"{days} days"
+            # Pattern 2: "X m" format (months) - NOT "mo"
+            if user_data['reddit_age'] == 'N/A':
+                age_match = re.search(r'(\d+)\s*m\b', page_text, re.IGNORECASE)
+                if age_match:
+                    months = age_match.group(1)
+                    if 1 <= int(months) <= 24:
+                        user_data['reddit_age'] = f"{months} m"
+            
+            # Pattern 3: "X d" format (days)
+            if user_data['reddit_age'] == 'N/A':
+                age_match = re.search(r'(\d+)\s*d\b', page_text, re.IGNORECASE)
+                if age_match:
+                    days = age_match.group(1)
+                    if 1 <= int(days) <= 365:
+                        user_data['reddit_age'] = f"{days} d"
             
             # Fallback: Full date format
             if user_data['reddit_age'] == 'N/A':
@@ -480,8 +474,8 @@ class RedditScraper:
                 
                 page = await context.new_page()
                 
-                # Step 1: Find subreddits (limit to 5)
-                subreddits = await self.find_subreddits(page, keyword, max_subreddits=5)
+                # Step 1: Find subreddits (limit to 10)
+                subreddits = await self.find_subreddits(page, keyword, max_subreddits=10)
                 
                 if not subreddits:
                     print("❌ No subreddits found")
@@ -489,7 +483,7 @@ class RedditScraper:
                     return
                 
                 print(f"\n📋 Found {len(subreddits)} subreddits")
-                print(f"🎯 Will scrape 5 users from each subreddit (max 25 total)\n")
+                print(f"🎯 Will scrape 25 users from each subreddit (max {len(subreddits) * 25} total)\n")
                 
                 # Step 2 & 3: Collect users and scrape profiles
                 subreddit_count = 0
@@ -497,15 +491,15 @@ class RedditScraper:
                     subreddit_count += 1
                     print(f"\n[{subreddit_count}/{len(subreddits)}] Processing r/{subreddit}")
                     
-                    # Get only 5 users per subreddit
-                    users = await self.get_active_users(page, subreddit, max_users=5)
+                    # Get 25 users per subreddit
+                    users = await self.get_active_users(page, subreddit, max_users=25)
                     
                     if not users:
                         print(f"  ⚠️  No users found, skipping...")
                         continue
                     
                     user_count = 0
-                    for user in users[:5]:  # Limit to exactly 5 users
+                    for user in users[:25]:  # Limit to exactly 25 users
                         user_count += 1
                         # Throttle to avoid bans
                         await asyncio.sleep(random.uniform(1, 2))
@@ -538,16 +532,45 @@ def main():
     print("🔍 Reddit OSINT Scraper")
     print("=" * 60)
     
-    keyword = input("\n🔑 Enter keyword to search: ").strip()
+    keywords_input = input("\n🔑 Enter keyword(s) to search (comma-separated for multiple): ").strip()
     
-    if not keyword:
+    if not keywords_input:
         print("❌ Keyword cannot be empty")
         return
+    
+    # Split by comma and clean up
+    keywords = [k.strip() for k in keywords_input.split(',') if k.strip()]
+    
+    if not keywords:
+        print("❌ No valid keywords provided")
+        return
+    
+    print(f"\n📝 Will scrape {len(keywords)} keyword(s): {', '.join(keywords)}")
+    print(f"📊 Per keyword: 10 subreddits × 25 users = up to 250 users\n")
     
     scraper = RedditScraper()
     
     try:
-        asyncio.run(scraper.run(keyword))
+        for idx, keyword in enumerate(keywords, 1):
+            print("\n" + "=" * 60)
+            print(f"🔍 KEYWORD {idx}/{len(keywords)}: {keyword}")
+            print("=" * 60)
+            
+            # Reset scraper stats for each keyword
+            scraper.total_scraped = 0
+            scraper.users_data = []
+            
+            asyncio.run(scraper.run(keyword))
+            
+            if idx < len(keywords):
+                print(f"\n⏳ Moving to next keyword in 3 seconds...")
+                import time
+                time.sleep(3)
+        
+        print("\n" + "=" * 60)
+        print("🎉 ALL KEYWORDS COMPLETED!")
+        print("=" * 60)
+        
     except KeyboardInterrupt:
         print("\n\n⚠️  Stopped by user. Data saved!")
     except Exception as e:
